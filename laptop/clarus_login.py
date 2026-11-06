@@ -38,6 +38,7 @@ MAX_LINE = 32                # longest message accepted from the hardware
 USERS_FILE = Path(__file__).with_name("users.json")
 
 ENTRY_RE = re.compile(rf"ENTRY (\d{{{CODE_DIGITS}}})")   # exactly "ENTRY 1234"
+TYPED_RE = re.compile(rf"TYPED(?: (\d{{1,{CODE_DIGITS}}}))?")  # live echo: "TYPED 48", or "TYPED" after *
 
 
 class DeviceError(Exception):
@@ -73,7 +74,9 @@ class Device:
             if time.monotonic() >= deadline:
                 return None
             try:
-                chunk = self.ser.read(64)  # returns early; the port's timeout is short
+                # Read what has already arrived, or wait for the next byte (up to the port's short
+                # timeout). This keeps the live keypad echo to a few milliseconds of delay.
+                chunk = self.ser.read(max(1, getattr(self.ser, "in_waiting", 0)))
             except Exception as e:
                 raise DeviceError(f"could not read from the hardware: {e}") from e
             self._buf += chunk
@@ -192,6 +195,30 @@ def new_code() -> str:
     return f"{secrets.randbelow(10 ** CODE_DIGITS):0{CODE_DIGITS}d}"
 
 
+def show_typed(digits: str) -> None:
+    """Live keypad echo, rewritten in place on one terminal line, e.g. 'Typed: 4 8 _ _'."""
+    slots = list(digits) + ["_"] * (CODE_DIGITS - len(digits))
+    print(f"\rTyped: {' '.join(slots)}   ", end="", flush=True)
+
+
+def wait_for_reply(dev, deadline: float) -> str:
+    """Show TYPED echoes as they arrive; return the first other message (ENTRY, TIMEOUT, ...).
+
+    The echo only repeats what was typed, so it reveals nothing about whether a digit is right.
+    """
+    show_typed("")
+    while True:
+        reply = dev.read_line(max(0.0, deadline - time.monotonic()))
+        if reply is None:
+            print()
+            raise DeviceError("no reply from the hardware")
+        typed = TYPED_RE.fullmatch(reply)
+        if not typed:
+            print()  # finish the live "Typed:" line
+            return reply
+        show_typed(typed.group(1) or "")
+
+
 def second_factor(dev, show_code: bool = False, sleep=time.sleep, make_code=new_code) -> bool:
     """Factor 2. True only if the right code is typed on the hardware in time.
 
@@ -210,9 +237,7 @@ def second_factor(dev, show_code: bool = False, sleep=time.sleep, make_code=new_
         else:
             print("Type the code shown on the CLARUS display, then press #.")
 
-        reply = dev.read_line(REPLY_DEADLINE_S)
-        if reply is None:
-            raise DeviceError("no reply from the hardware")
+        reply = wait_for_reply(dev, time.monotonic() + REPLY_DEADLINE_S)
         if reply == "TIMEOUT":
             print("Time is up.")
         else:

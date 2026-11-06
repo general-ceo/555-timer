@@ -7,7 +7,7 @@
 
   Messages over the USB cable (serial, 9600 baud, one per line; full list in the README):
     laptop -> board:  HELLO | CODE 1234 | OK | BAD | CANCEL
-    board -> laptop:  CLARUS 1 | STARTED | ENTRY 1234 | TIMEOUT | ERROR <what>
+    board -> laptop:  CLARUS 1 | STARTED | TYPED 12 | ENTRY 1234 | TIMEOUT | ERROR <what>
 
   Boards: Adafruit ItsyBitsy M0 Express or M4 Express (the team's board; 3.3 V logic), or an
   Arduino Uno. The pin list below picks the right set automatically. Other parts (TBD): a 4x4
@@ -192,16 +192,25 @@ void beginAttempt(const char *newCode) {
 }
 
 // ---------- keypad ----------
+// Live echo for the laptop screen: the digits typed so far, e.g. "TYPED 48" ("TYPED" alone after
+// a clear). It only repeats what was typed; it never says whether any digit is right.
+void sendTyped() {
+  Serial.print(F("TYPED "));
+  Serial.println(typed);
+}
+
 void handleKey(char key) {
   if (state != ST_ENTERING) return;          // keys only count while a code is active
   if (key >= '0' && key <= '9') {
     if (typedCount < CODE_DIGITS) {          // extra digits are ignored
       typed[typedCount++] = key;
       typed[typedCount] = '\0';
+      sendTyped();
     }
   } else if (key == '*') {                   // TBD: * clears
     typedCount = 0;
     typed[0] = '\0';
+    sendTyped();
   } else if (key == '#') {                   // TBD: # sends, only once all digits are in
     if (typedCount == CODE_DIGITS) {
       stopTimer();

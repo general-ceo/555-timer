@@ -15,7 +15,7 @@ Values marked **TBD** in the code are team decisions that haven't been made yet.
 1. The laptop program asks for a username and password (factor 1) and checks them against `users.json`. That file holds only salted hashes, never passwords.
 2. The laptop makes a random 4-digit code with Python's `secrets` module and sends `CODE 4821` down the USB cable.
 3. The Arduino shows the code on the OLED, starts the 555, and answers `STARTED`.
-4. The user types the digits on the keypad. `*` clears and `#` sends. The Arduino sends `ENTRY 4821`.
+4. The user types the digits on the keypad. `*` clears and `#` sends. On every digit or `*`, the Arduino sends `TYPED` with the digits so far, and the laptop shows them live (`Typed: 4 8 _ _`). On `#`, the Arduino sends `ENTRY 4821`.
 5. If the 555 runs out first, the Arduino lights **yellow** and sends `TIMEOUT`.
 6. The laptop compares the entry with its code and sends `OK` (Arduino lights **green**) or `BAD` (Arduino lights **red**).
 7. After a wrong code or a timeout, the laptop sends a new code. After 3 failures (TBD), it locks out for 60 s (TBD) and goes back to the password prompt.
@@ -34,6 +34,7 @@ Values marked **TBD** in the code are team decisions that haven't been made yet.
 | Arduino → Laptop | `CLARUS 1` | Yes. This only finds the right port; it is not security. |
 | Laptop → Arduino | `CODE 4821` | Show this code and start the timer |
 | Arduino → Laptop | `STARTED` | Timer running, code on the display |
+| Arduino → Laptop | `TYPED 48` | The digits typed so far, sent on every digit or `*` (`TYPED` alone after a clear). Only an echo: it never says whether a digit is right. |
 | Arduino → Laptop | `ENTRY 4821` | What the user typed (sent on `#`) |
 | Arduino → Laptop | `TIMEOUT` | The 555 ran out; yellow is on |
 | Laptop → Arduino | `OK` / `BAD` | Light green / red |
@@ -110,7 +111,7 @@ The ItsyBitsy M0 and M4 have plenty of memory. On an Uno, the OLED's screen buff
 1. Open Tools > Serial Monitor and set it to 9600 baud with **Newline** line ending.
 2. Type `HELLO`. Expect `CLARUS 1`.
 3. Type `CODE 1234`. Expect `STARTED`, with the code on the OLED.
-4. On the keypad, press `1 2 3 4 #`. Expect `ENTRY 1234`.
+4. On the keypad, press `1 2 3 4 #`. Expect `TYPED 1`, `TYPED 12`, `TYPED 123`, `TYPED 1234`, then `ENTRY 1234`.
 5. Type `OK` for green or `BAD` for red. Or wait about 20 s for `TIMEOUT` and yellow.
 6. Close the Serial Monitor afterward. Only one program can use the port at a time.
 

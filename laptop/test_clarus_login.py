@@ -74,6 +74,26 @@ class SecondFactorTests(unittest.TestCase):
     def factor(self, dev, *code_values):
         return run_quietly(cl.second_factor, dev, sleep=no_sleep, make_code=codes(*code_values))
 
+    def test_live_typing_is_shown_and_is_not_a_failure(self):
+        dev = FakeDevice(["STARTED", "TYPED 4", "TYPED 48", "TYPED", "TYPED 4", "TYPED 48",
+                          "TYPED 482", "TYPED 4821", "ENTRY 4821"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            granted = cl.second_factor(dev, sleep=no_sleep, make_code=codes("4821"))
+        self.assertTrue(granted)
+        self.assertEqual(dev.sent, ["CODE 4821", "OK"])
+        self.assertIn("Typed: 4 8 _ _", out.getvalue())
+        self.assertIn("Typed: 4 8 2 1", out.getvalue())
+
+    def test_malformed_typed_message_counts_as_wrong(self):
+        dev = FakeDevice(["STARTED", "TYPED 48215", "STARTED", "TYPED x", "STARTED", "TIMEOUT"])
+        self.assertFalse(self.factor(dev, "4821", "4821", "4821"))
+        self.assertEqual(dev.sent, ["CODE 4821", "BAD", "CODE 4821", "BAD", "CODE 4821"])
+
+    def test_silence_after_typing_means_fail_closed(self):
+        with self.assertRaises(cl.DeviceError):
+            self.factor(FakeDevice(["STARTED", "TYPED 4", "TYPED 48"]), "4821")
+
     def test_right_code_is_granted(self):
         dev = FakeDevice(["STARTED", "ENTRY 4821"])
         self.assertTrue(self.factor(dev, "4821"))
