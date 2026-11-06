@@ -1,0 +1,21 @@
+# Logins: salted password hashes. Each person creates their own with --add-user.
+users.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Arduino build output (only if you export compiled binaries)
+build/
+*.hex
+*.elf
+*.bin
+
+# Editors and operating systems
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
