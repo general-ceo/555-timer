@@ -2,11 +2,11 @@
 
 Starter code for the team's current rough flow (11/05, **not final**). The laptop makes and checks the one-time code. The hardware shows it on the OLED, runs the 555 timer, reads the keypad, and lights the LEDs.
 
-| File | Runs on | Language | Proposed owner |
-|---|---|---|---|
-| `laptop/clarus_login.py` | Laptop | Python 3 + pyserial | Julianna |
-| `laptop/test_clarus_login.py` | Laptop | Python (tests, no hardware needed) | Julianna |
-| `arduino/clarus/clarus.ino` | Arduino | C++ (Arduino) | Maceo (keypad), Seamus (OLED, timer, LEDs) |
+| File | Runs on | Language |
+|---|---|---|
+| `laptop/clarus_login.py` | Laptop | Python 3 + pyserial |
+| `laptop/test_clarus_login.py` | Laptop | Python (tests, no hardware needed) |
+| `arduino/clarus/clarus.ino` | Arduino | C++ (Arduino) |
 
 Values marked **TBD** in the code are team decisions that haven't been made yet.
 
@@ -70,7 +70,7 @@ The other parts are still examples: a **4x4 membrane keypad** and a **128x64 I2C
 
 *Option B, a CMOS 555* (TLC555, LMC555, or ICM7555). These run from **3V**. Wire it as in Option A, but connect pins 8 and R to 3V instead of USB, and wire pin 3 straight to A2 with no divider.
 
-**Window length:** about 1.1 × R × C either way. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard. Natalia is confirming the values.
+**Window length:** about 1.1 × R × C either way. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard.
 
 ### Arduino Uno (alternative)
 
