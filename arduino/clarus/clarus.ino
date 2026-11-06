@@ -9,9 +9,13 @@
     laptop -> board:  HELLO | CODE 1234 | OK | BAD | CANCEL
     board -> laptop:  CLARUS 1 | STARTED | ENTRY 1234 | TIMEOUT | ERROR <what>
 
-  Parts are not final (TBD). Written for an Arduino Uno, a 4x4 membrane keypad, and a
-  128x64 I2C OLED (SSD1306). Set USE_OLED to 0 to build without the OLED, then run the
-  laptop program with --show-code.
+  Boards: Adafruit ItsyBitsy M0 Express or M4 Express (the team's board; 3.3 V logic), or an
+  Arduino Uno. The pin list below picks the right set automatically. Other parts (TBD): a 4x4
+  membrane keypad and a 128x64 I2C OLED (SSD1306). Set USE_OLED to 0 to build without the
+  OLED, then run the laptop program with --show-code.
+
+  ItsyBitsy boards need "Adafruit SAMD Boards" in Tools > Board > Boards Manager (after adding
+  Adafruit's board URL in File > Preferences; see the README).
 
   Libraries (Arduino IDE > Tools > Manage Libraries):
     "Keypad" by Mark Stanley and Alexander Brevig
@@ -46,18 +50,31 @@ char keys[ROWS][COLS] = {
   {'7', '8', '9', 'C'},
   {'*', '0', '#', 'D'}
 };
+#if defined(ARDUINO_ARCH_SAMD)
+// Adafruit ItsyBitsy M0 Express or M4 Express. 3.3 V logic: never feed a pin more than 3.3 V.
+// Skips #5 (output only), #13 (onboard red LED), and #6 and #8 (onboard RGB LED on the M4).
+// USB is built into the chip, so #0 and #1 stay free. The OLED uses the pins labeled SDA and SCL.
+byte rowPins[ROWS] = {7, 9, 10, 11};
+byte colPins[COLS] = {12, 2, 3, 4};
+const int RED_LED = A3;
+const int YELLOW_LED = A4;
+const int GREEN_LED = A5;
+#else
+// Arduino Uno (5 V logic). D0 and D1 carry the USB messages, so nothing else may use them.
+// The OLED uses A4 (SDA) and A5 (SCL).
 byte rowPins[ROWS] = {2, 3, 4, 5};
 byte colPins[COLS] = {6, 7, 8, 9};
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-
 const int RED_LED = 10;
 const int YELLOW_LED = 11;
 const int GREEN_LED = 12;
+#endif
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
 const int TIMER_TRIGGER = A0;  // to 555 pin 2 (TRIG): a short LOW pulse starts the 20 s window
 const int TIMER_RESET = A1;    // to 555 pin 4 (RESET): LOW stops the timer
-const int TIMER_OUTPUT = A2;   // from 555 pin 3 (OUT): HIGH while the window is open
-// D0 and D1 carry the USB serial messages, so nothing else may use them.
-// The OLED uses A4 (SDA) and A5 (SCL).
+const int TIMER_OUTPUT = A2;   // from 555 pin 3 (OUT): HIGH while the window is open.
+                               // On an ItsyBitsy with the 555 on 5 V, go through a voltage
+                               // divider (see the README), or the 555 could damage this pin.
 
 #if USE_OLED
 Adafruit_SSD1306 display(128, 64, &Wire, -1);

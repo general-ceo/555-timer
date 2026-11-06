@@ -40,9 +40,40 @@ Values marked **TBD** in the code are team decisions that haven't been made yet.
 | Laptop → Arduino | `CANCEL` | Stop and go back to idle |
 | Arduino → Laptop | `ERROR TIMER` / `ERROR UNKNOWN` / `ERROR TOO_LONG` | Timer didn't start / unknown message / message too long |
 
-## Wiring (example only; parts are not final)
+## Wiring: Adafruit ItsyBitsy M0 or M4 (the team's board)
 
-Written for an **Arduino Uno**, a **4x4 membrane keypad**, and a **128x64 I2C OLED (SSD1306)**. One USB cable powers everything and carries the messages. Everything below runs off the Arduino's **5V** and **GND** pins.
+The other parts are still examples: a **4x4 membrane keypad** and a **128x64 I2C OLED (SSD1306)**. One USB cable powers everything and carries the messages. The sketch picks the ItsyBitsy pins automatically when you build for an ItsyBitsy.
+
+**The ItsyBitsy runs at 3.3 V.** No pin may ever see more than 3.3 V, so the 555 needs care (below).
+
+| Part | Connects to |
+|---|---|
+| Keypad, 8 wires | Rows → #7, #9, #10, #11; columns → #12, #2, #3, #4 (#2–#4 are on the short end of the board). Pinouts differ between keypads; if keys come out wrong, change the order of `rowPins` / `colPins`. |
+| Red / yellow / green LED | A3 / A4 / A5 → 220–330 Ω resistor → LED long leg; LED short leg → G |
+| OLED, 4 pins | VCC → 3V, GND → G, SDA → SDA, SCL → SCL. The ItsyBitsy has no pull-up resistors on SDA/SCL; most OLED modules include them. |
+| Leave free | #5 (output only) and #13 (onboard LED) |
+
+**555 timer: pick one.**
+
+*Option A, a standard NE555.* It needs at least 4.5 V, so run it from the **USB** pin (5 V):
+
+| 555 pin | Connects to |
+|---|---|
+| 1 (GND) | G |
+| 2 (TRIG) | A0. The board's 3.3 V holds it off; a LOW pulse starts the window. |
+| 3 (OUT) | **Through a voltage divider:** pin 3 → 10 kΩ → A2, and A2 → 20 kΩ → G. Never wire pin 3 straight to A2, because 5 V can damage it. |
+| 4 (RESET) | A1 |
+| 5 (CTRL) | 10 nF capacitor → G |
+| 6 + 7 | Join them. Resistor R up to USB (5 V); capacitor C down to G. On an electrolytic capacitor, the leg marked "−" goes to G. |
+| 8 (VCC) | USB (5 V) |
+
+*Option B, a CMOS 555* (TLC555, LMC555, or ICM7555). These run from **3V**. Wire it as in Option A, but connect pins 8 and R to 3V instead of USB, and wire pin 3 straight to A2 with no divider.
+
+**Window length:** about 1.1 × R × C either way. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard. Natalia is confirming the values.
+
+### Arduino Uno (alternative)
+
+If the team switches to an Uno, the sketch uses these pins instead. Everything runs off the Uno's **5V** and **GND**, and no divider is needed.
 
 | Part | Connects to |
 |---|---|
@@ -58,21 +89,22 @@ Written for an **Arduino Uno**, a **4x4 membrane keypad**, and a **128x64 I2C OL
 | 555 pin 8 (VCC) | 5V |
 | D0, D1 | **Leave empty.** They carry the USB messages. |
 
-**Window length:** about 1.1 × R × C. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard. Natalia is confirming the values.
-
-If the board shows "Timer fault" and the wiring looks right, measure pin 3 while the timer runs. A standard NE555's HIGH output can sit near the bottom of what the Arduino reads as HIGH. A CMOS 555 (TLC555 or LMC555) outputs a full 5 V.
+On an Uno, if the board shows "Timer fault" and the wiring looks right, measure pin 3 while the timer runs. A standard NE555's HIGH output can sit near the bottom of what the Uno reads as HIGH. A CMOS 555 (TLC555 or LMC555) outputs a full 5 V.
 
 ## Running it
 
 **Arduino**
 1. Install the Arduino IDE.
-2. In Tools > Manage Libraries, install **Keypad** (by Mark Stanley and Alexander Brevig) and **Adafruit SSD1306**, which also installs Adafruit GFX.
-3. Open `arduino/clarus/clarus.ino`, pick the board and port, and click **Upload**.
-4. No OLED yet? Set `USE_OLED` to `0` at the top of the sketch.
+2. **ItsyBitsy only:**
+   1. Under File > Preferences > "Additional boards manager URLs", add `https://adafruit.github.io/arduino-board-index/package_adafruit_index.json`.
+   2. In Tools > Board > Boards Manager, install **Adafruit SAMD Boards**.
+3. In Tools > Manage Libraries, install **Keypad** (by Mark Stanley and Alexander Brevig) and **Adafruit SSD1306**, which also installs Adafruit GFX.
+4. Open `arduino/clarus/clarus.ino`. In Tools > Board, pick the ItsyBitsy M0 or M4 entry, whichever is printed on your board, then pick the port and click **Upload**. If no port shows up, double-tap the ItsyBitsy's reset button to put it into upload mode, and check that the USB cable carries data.
+5. No OLED yet? Set `USE_OLED` to `0` at the top of the sketch.
 
-The sketch compiles for an Arduino Uno, with and without the OLED. It was checked on 11/05 with Arduino AVR Boards 1.8.8, Keypad 3.1.1, and Adafruit SSD1306 2.5.17. It hasn't run on real hardware yet.
+The sketch compiles for an Arduino Uno, with and without the OLED. It was checked on 11/05 with Arduino AVR Boards 1.8.8, Keypad 3.1.1, and Adafruit SSD1306 2.5.17. It also compiles for the ItsyBitsy M0 Express and the ItsyBitsy M4, with and without the OLED (checked 11/06 with Adafruit SAMD Boards 1.7.17). The ItsyBitsy pins were checked against Adafruit's board definitions. Nothing has run on real hardware yet.
 
-On an Uno, the OLED's screen buffer takes 1 KB of the board's 2 KB memory at startup, which leaves only about 270 bytes free. That's enough for this sketch, but keep text in `F("...")` and avoid large arrays or `String`. If the OLED stays blank, low memory is one possible cause.
+The ItsyBitsy M0 and M4 have plenty of memory. On an Uno, the OLED's screen buffer takes 1 KB of the board's 2 KB memory at startup, which leaves only about 270 bytes free. That's enough for this sketch, but keep text in `F("...")` and avoid large arrays or `String`. If the OLED stays blank, low memory is one possible cause.
 
 **Test the board by itself:**
 1. Open Tools > Serial Monitor and set it to 9600 baud with **Newline** line ending.
