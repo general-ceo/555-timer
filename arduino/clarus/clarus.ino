@@ -54,8 +54,8 @@ char keys[ROWS][COLS] = {
 // Adafruit ItsyBitsy M0 Express or M4 Express. 3.3 V logic: never feed a pin more than 3.3 V.
 // Skips #5 (output only), #13 (onboard red LED), and #6 and #8 (onboard RGB LED on the M4).
 // USB is built into the chip, so #0 and #1 stay free. The OLED uses the pins labeled SDA and SCL.
-byte rowPins[ROWS] = {7, 9, 10, 11};
-byte colPins[COLS] = {12, 2, 3, 4};
+byte rowPins[ROWS] = {2, 3, 4, 7};
+byte colPins[COLS] = {9, 10, 11, 12};
 const int RED_LED = A3;
 const int YELLOW_LED = A4;
 const int GREEN_LED = A5;
@@ -151,6 +151,8 @@ void stopTimer() {
   digitalWrite(TIMER_RESET, LOW);   // holds the 555 off and empties its capacitor
 }
 
+bool timerOutputHigh() { return analogRead(TIMER_OUTPUT) > 500; }
+
 bool startTimer() {
   stopTimer();
   delay(20);                        // let the capacitor empty if a window was still running
@@ -160,7 +162,7 @@ bool startTimer() {
   digitalWrite(TIMER_TRIGGER, HIGH);
   delay(5);
   timerStartedAt = millis();
-  return digitalRead(TIMER_OUTPUT) == HIGH;   // the window should now be open
+  return timerOutputHigh();  // the window should now be open
 }
 
 // ---------- states ----------
@@ -189,6 +191,45 @@ void beginAttempt(const char *newCode) {
   state = ST_ENTERING;
   showCodeScreen();
   Serial.println(F("STARTED"));
+}
+
+// ---------- 555 diagnostic ----------
+// "TIMERTEST" (typed in the Serial Monitor) starts the 555 and reports what A2 sees, skipping the
+// normal fail-closed checks. It's only for wiring and timing the circuit; it never grants access.
+//   TIMERTEST A2=<0-1023>     reading right after the trigger (above 500 counts as on), then once a second
+//   TIMERTEST WINDOW_MS=<ms>  how long the 555's output stayed on (should be about 20000)
+//   TIMERTEST NO_OUTPUT       the output never turned on
+//   TIMERTEST NEVER_OFF       still on after 30 s
+// It blocks for up to 30 s; the board ignores other messages until it finishes.
+void timerTest() {
+  goIdle();
+  startTimer();
+  unsigned long t0 = timerStartedAt;
+  int raw = analogRead(TIMER_OUTPUT);
+  Serial.print(F("TIMERTEST A2="));
+  Serial.println(raw);
+  if (raw <= 500) {
+    Serial.println(F("TIMERTEST NO_OUTPUT"));
+    stopTimer();
+    return;
+  }
+  unsigned long lastReport = millis();
+  while (millis() - t0 < 30000UL) {
+    int v = analogRead(TIMER_OUTPUT);
+    if (v <= 500) {
+      Serial.print(F("TIMERTEST WINDOW_MS="));
+      Serial.println(millis() - t0);
+      stopTimer();
+      return;
+    }
+    if (millis() - lastReport >= 1000) {
+      lastReport = millis();
+      Serial.print(F("TIMERTEST A2="));
+      Serial.println(v);
+    }
+  }
+  Serial.println(F("TIMERTEST NEVER_OFF"));
+  stopTimer();
 }
 
 // ---------- keypad ----------
@@ -245,6 +286,8 @@ void handleCommand(const char *cmd) {
     showResult(RED_LED, F("Wrong\ncode"));
   } else if (strcmp(cmd, "CANCEL") == 0) {
     goIdle();
+  } else if (strcmp(cmd, "TIMERTEST") == 0) {
+    timerTest();
   } else {
     Serial.println(F("ERROR UNKNOWN"));
   }
@@ -297,7 +340,7 @@ void loop() {
 
   if (state == ST_ENTERING) {
     unsigned long elapsed = millis() - timerStartedAt;
-    bool timerDone = elapsed > 50 && digitalRead(TIMER_OUTPUT) == LOW;
+    bool timerDone = elapsed > 50 && !timerOutputHigh();
     if (timerDone || elapsed > MAX_WINDOW_MS) {
       stopTimer();
       Serial.println(F("TIMEOUT"));

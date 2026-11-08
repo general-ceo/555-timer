@@ -39,6 +39,7 @@ Values marked **TBD** in the code are team decisions that haven't been made yet.
 | Arduino → Laptop | `TIMEOUT` | The 555 ran out; yellow is on |
 | Laptop → Arduino | `OK` / `BAD` | Light green / red |
 | Laptop → Arduino | `CANCEL` | Stop and go back to idle |
+| Serial Monitor → Arduino | `TIMERTEST` | Diagnostic for wiring and timing the 555. The board starts it and reports `TIMERTEST A2=<0–1023>` (above 500 counts as on), then `WINDOW_MS=<ms>`, `NO_OUTPUT`, or `NEVER_OFF`. It never grants access. |
 | Arduino → Laptop | `ERROR TIMER` / `ERROR UNKNOWN` / `ERROR TOO_LONG` | Timer didn't start / unknown message / message too long |
 
 ## Wiring: Adafruit ItsyBitsy M0 or M4 (the team's board)
@@ -70,7 +71,7 @@ The other parts are still examples: a **4x4 membrane keypad** and a **128x64 I2C
 
 *Option B, a CMOS 555* (TLC555, LMC555, or ICM7555). These run from **3V**. Wire it as in Option A, but connect pins 8 and R to 3V instead of USB, and wire pin 3 straight to A2 with no divider.
 
-**Window length:** about 1.1 × R × C either way. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard.
+**Window length:** about 1.1 × R × C either way. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard; `TIMERTEST` in the Serial Monitor measures it for you. Our build currently measures about 13.7 s (see Known limitations).
 
 ### Arduino Uno (alternative)
 
@@ -115,6 +116,13 @@ The ItsyBitsy M0 and M4 have plenty of memory. On an Uno, the OLED's screen buff
 5. Type `OK` for green or `BAD` for red. Or wait about 20 s for `TIMEOUT` and yellow.
 6. Close the Serial Monitor afterward. Only one program can use the port at a time.
 
+**Testing before the 555 is wired:** with nothing on A2, `CODE 1234` answers `ERROR TIMER`. That's correct: the board refuses to start an attempt without a working timer. To test everything else anyway, run a jumper wire from **A2 to 3V** on an ItsyBitsy (**never 5V or USB**, which could damage the pin), or from A2 to 5V on an Uno. The board then thinks the timer is running:
+- `CODE 1234` answers `STARTED`.
+- About 28 s later, the backstop limit sends `TIMEOUT` and lights yellow.
+- Typing the code and `#` before then sends `ENTRY 1234` as usual.
+
+Remove the jumper before connecting the 555.
+
 **Laptop** (from a terminal, in the `laptop` folder)
 
 Install pyserial:
@@ -150,6 +158,8 @@ There is deliberately no switch that skips the hardware in the real program. A s
 - The 555's R and C values
 
 ## Known limitations (for the report)
+
+- **The timer window is short.** On our build the 555 window measures about **13.7 s** instead of the 20 s target, because of part tolerance and the R and C values used. When the timer is on, A2 reads about 790. The window scales with R × C, so raising R × C by about 1.5× (a larger resistor R or capacitor C) brings it close to 20 s. Use `TIMERTEST` to measure it. Planned before the 11/16 presentation.
 
 - **No device authentication.** A program on the laptop could pretend to be the board, because the code travels in plain text over the cable. Future work: a secret key shared by the board and the laptop, with a keyed-hash (HMAC) challenge and response.
 - **Local access defeats it.** Anyone who can run or edit programs on the laptop can skip `clarus_login.py`. Guarding the real computer login would mean hooking into the operating system's login, which is out of scope.
