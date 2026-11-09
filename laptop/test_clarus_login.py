@@ -1,9 +1,6 @@
-"""Tests for clarus_login.py that need no hardware and no pyserial.
+"""Tests for clarus_login.py using a fake board (no hardware needed).
 
-Run:  python -m unittest test_clarus_login.py -v
-
-The fake device below exists only here, in the tests. The real program has no switch that
-skips the hardware, because a switch like that would be a way around the second factor.
+Run: python -m unittest test_clarus_login.py -v
 """
 import contextlib
 import io
@@ -17,7 +14,7 @@ import clarus_login as cl
 
 
 class FakeDevice:
-    """Plays the hardware: returns scripted replies and records what the laptop sent."""
+    """Scripted board replies; records what the laptop sends."""
 
     def __init__(self, replies):
         self.replies = list(replies)
@@ -34,7 +31,7 @@ class FakeDevice:
 
 
 class FakeSerial:
-    """Plays the serial port for the Device class: hands out byte chunks one read at a time."""
+    """Fake serial port that returns one byte chunk per read."""
 
     def __init__(self, chunks):
         self.chunks = list(chunks)

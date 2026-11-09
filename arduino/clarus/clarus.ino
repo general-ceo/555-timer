@@ -1,29 +1,15 @@
-/*
-  CLARUS hardware (starter code). Arduino sketches are C++.
-
-  This board's job: show the one-time code from the laptop on the OLED, start the 555 timer,
-  collect the keypad entry, send it to the laptop, and light the LEDs. The laptop decides
-  whether the code is right; this board never checks it.
-
-  Messages over the USB cable (serial, 9600 baud, one per line; full list in the README):
-    laptop -> board:  HELLO | CODE 1234 | OK | BAD | CANCEL
-    board -> laptop:  CLARUS 1 | STARTED | TYPED 12 | ENTRY 1234 | TIMEOUT | ERROR <what>
-
-  Boards: Adafruit ItsyBitsy M0 Express or M4 Express (the team's board; 3.3 V logic), or an
-  Arduino Uno. The pin list below picks the right set automatically. Other parts (TBD): a 4x4
-  membrane keypad and a 128x64 I2C OLED (SSD1306). Set USE_OLED to 0 to build without the
-  OLED, then run the laptop program with --show-code.
-
-  ItsyBitsy boards need "Adafruit SAMD Boards" in Tools > Board > Boards Manager (after adding
-  Adafruit's board URL in File > Preferences; see the README).
-
-  Libraries (Arduino IDE > Tools > Manage Libraries):
-    "Keypad" by Mark Stanley and Alexander Brevig
-    "Adafruit SSD1306" (also installs "Adafruit GFX Library"), only if USE_OLED is 1
-*/
+// CLARUS board sketch (Adafruit ItsyBitsy M0 Express; also builds for an Arduino Uno).
+// Shows the laptop's code on the OLED, runs the 555 window, reads the keypad,
+// sends the entry back, and lights the LEDs. The laptop decides if the code is right.
+//
+// Serial, 9600 baud, one message per line:
+//   laptop -> board: HELLO, CODE 1234, OK, BAD, CANCEL
+//   board -> laptop: CLARUS 1, STARTED, TYPED 12, ENTRY 1234, TIMEOUT, ERROR <reason>
+//
+// Libraries: Keypad, Adafruit SSD1306, Adafruit GFX
 
 #ifndef USE_OLED
-#define USE_OLED 1    // change to 0 to build without the OLED
+#define USE_OLED 1   // set to 0 to build without the OLED
 #endif
 
 #include <Keypad.h>
@@ -33,15 +19,11 @@
 #include <Adafruit_SSD1306.h>
 #endif
 
-// ---------- settings ----------
-const int CODE_DIGITS = 4;                 // TBD: must match CODE_DIGITS in clarus_login.py
-const unsigned long RESULT_SHOW_MS = 3000; // how long the green, red or yellow light stays on
-const unsigned long MAX_WINDOW_MS = 28000; // backstop if the 555 never turns off (wiring fault).
-                                           // Longer than the 20 s window plus tolerance, but
-                                           // shorter than the laptop's own 30 s limit.
-const unsigned long MAX_WAIT_MS = 5000;    // give up on the laptop's OK/BAD after this long
+const int CODE_DIGITS = 4;                  // must match clarus_login.py
+const unsigned long RESULT_SHOW_MS = 3000;  // how long a result LED stays on
+const unsigned long MAX_WINDOW_MS = 28000;  // backstop if the 555 never turns off
+const unsigned long MAX_WAIT_MS = 5000;     // give up waiting for OK/BAD
 
-// ---------- pins (example wiring; see the README) ----------
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
@@ -51,17 +33,14 @@ char keys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 #if defined(ARDUINO_ARCH_SAMD)
-// Adafruit ItsyBitsy M0 Express or M4 Express. 3.3 V logic: never feed a pin more than 3.3 V.
-// Skips #5 (output only), #13 (onboard red LED), and #6 and #8 (onboard RGB LED on the M4).
-// USB is built into the chip, so #0 and #1 stay free. The OLED uses the pins labeled SDA and SCL.
+// ItsyBitsy (3.3 V logic)
 byte rowPins[ROWS] = {2, 3, 4, 7};
 byte colPins[COLS] = {9, 10, 11, 12};
 const int RED_LED = A3;
 const int YELLOW_LED = A4;
 const int GREEN_LED = A5;
 #else
-// Arduino Uno (5 V logic). D0 and D1 carry the USB messages, so nothing else may use them.
-// The OLED uses A4 (SDA) and A5 (SCL).
+// Uno
 byte rowPins[ROWS] = {2, 3, 4, 5};
 byte colPins[COLS] = {6, 7, 8, 9};
 const int RED_LED = 10;
@@ -70,29 +49,27 @@ const int GREEN_LED = 12;
 #endif
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-const int TIMER_TRIGGER = A0;  // to 555 pin 2 (TRIG): a short LOW pulse starts the 20 s window
-const int TIMER_RESET = A1;    // to 555 pin 4 (RESET): LOW stops the timer
-const int TIMER_OUTPUT = A2;   // from 555 pin 3 (OUT): HIGH while the window is open.
-                               // On an ItsyBitsy with the 555 on 5 V, go through a voltage
-                               // divider (see the README), or the 555 could damage this pin.
+const int TIMER_TRIGGER = A0;  // 555 pin 2
+const int TIMER_RESET = A1;    // 555 pin 4
+const int TIMER_OUTPUT = A2;   // 555 pin 3, through the 10k/20k divider
 
 #if USE_OLED
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 bool oledOk = false;
 #endif
 
-// The Keypad library already uses the names IDLE, PRESSED, HOLD and RELEASED, so these get a prefix.
+// ST_ prefix because the Keypad library already uses IDLE, PRESSED, etc.
 enum BoardState { ST_IDLE, ST_ENTERING, ST_WAITING, ST_RESULT };
 BoardState state = ST_IDLE;
 
-char code[CODE_DIGITS + 1];   // only for showing it; the laptop keeps its own copy and checks
+char code[CODE_DIGITS + 1];   // only for display; the laptop keeps its own copy
 char typed[CODE_DIGITS + 1];
 int typedCount = 0;
 unsigned long timerStartedAt = 0;
 unsigned long resultShownAt = 0;
 unsigned long waitingSince = 0;
 
-char lineBuf[24];             // longest message we accept from the laptop
+char lineBuf[24];
 int lineLen = 0;
 bool lineTooLong = false;
 
@@ -107,7 +84,7 @@ void showMessage(const __FlashStringHelper *message) {
   display.println(message);
   display.display();
 #else
-  (void)message;                    // no OLED in this build
+  (void)message;
 #endif
 }
 
@@ -131,7 +108,7 @@ void showCodeScreen() {
 #endif
 }
 
-// ---------- lights ----------
+// ---------- LEDs ----------
 void lightsOff() {
   digitalWrite(RED_LED, LOW);
   digitalWrite(YELLOW_LED, LOW);
@@ -148,21 +125,21 @@ void showResult(int ledPin, const __FlashStringHelper *message) {
 
 // ---------- 555 timer ----------
 void stopTimer() {
-  digitalWrite(TIMER_RESET, LOW);   // holds the 555 off and empties its capacitor
+  digitalWrite(TIMER_RESET, LOW);
 }
 
-bool timerOutputHigh() { return analogRead(TIMER_OUTPUT) > 500; }
+bool timerOutputHigh() { return analogRead(TIMER_OUTPUT) > 500; }  // about 1.6 V
 
 bool startTimer() {
   stopTimer();
-  delay(20);                        // let the capacitor empty if a window was still running
+  delay(20);                        // let the capacitor discharge
   digitalWrite(TIMER_RESET, HIGH);
-  digitalWrite(TIMER_TRIGGER, LOW); // short LOW pulse on pin 2 starts the one-shot
+  digitalWrite(TIMER_TRIGGER, LOW); // short LOW pulse starts the one-shot
   delay(1);
   digitalWrite(TIMER_TRIGGER, HIGH);
   delay(5);
   timerStartedAt = millis();
-  return timerOutputHigh();  // the window should now be open
+  return timerOutputHigh();
 }
 
 // ---------- states ----------
@@ -181,7 +158,7 @@ void beginAttempt(const char *newCode) {
   typedCount = 0;
   typed[0] = '\0';
   lightsOff();
-  if (!startTimer()) {              // fail closed: no timer, no attempt
+  if (!startTimer()) {              // no timer, no attempt
     stopTimer();
     state = ST_IDLE;
     showMessage(F("Timer\nfault"));
@@ -193,14 +170,8 @@ void beginAttempt(const char *newCode) {
   Serial.println(F("STARTED"));
 }
 
-// ---------- 555 diagnostic ----------
-// "TIMERTEST" (typed in the Serial Monitor) starts the 555 and reports what A2 sees, skipping the
-// normal fail-closed checks. It's only for wiring and timing the circuit; it never grants access.
-//   TIMERTEST A2=<0-1023>     reading right after the trigger (above 500 counts as on), then once a second
-//   TIMERTEST WINDOW_MS=<ms>  how long the 555's output stayed on (should be about 20000)
-//   TIMERTEST NO_OUTPUT       the output never turned on
-//   TIMERTEST NEVER_OFF       still on after 30 s
-// It blocks for up to 30 s; the board ignores other messages until it finishes.
+// TIMERTEST (from the Serial Monitor): measures how long the 555 window lasts.
+// Prints the A2 reading, then WINDOW_MS, NO_OUTPUT, or NEVER_OFF. Never grants access.
 void timerTest() {
   goIdle();
   startTimer();
@@ -233,26 +204,24 @@ void timerTest() {
 }
 
 // ---------- keypad ----------
-// Live echo for the laptop screen: the digits typed so far, e.g. "TYPED 48" ("TYPED" alone after
-// a clear). It only repeats what was typed; it never says whether any digit is right.
 void sendTyped() {
   Serial.print(F("TYPED "));
   Serial.println(typed);
 }
 
 void handleKey(char key) {
-  if (state != ST_ENTERING) return;          // keys only count while a code is active
+  if (state != ST_ENTERING) return;
   if (key >= '0' && key <= '9') {
-    if (typedCount < CODE_DIGITS) {          // extra digits are ignored
+    if (typedCount < CODE_DIGITS) {
       typed[typedCount++] = key;
       typed[typedCount] = '\0';
       sendTyped();
     }
-  } else if (key == '*') {                   // TBD: * clears
+  } else if (key == '*') {          // clear
     typedCount = 0;
     typed[0] = '\0';
     sendTyped();
-  } else if (key == '#') {                   // TBD: # sends, only once all digits are in
+  } else if (key == '#') {          // submit, only with all digits in
     if (typedCount == CODE_DIGITS) {
       stopTimer();
       state = ST_WAITING;
@@ -263,11 +232,10 @@ void handleKey(char key) {
       return;
     }
   }
-  // A, B, C and D are ignored.
   showCodeScreen();
 }
 
-// ---------- messages from the laptop ----------
+// ---------- serial ----------
 bool isDigits(const char *s, int n) {
   for (int i = 0; i < n; i++) {
     if (s[i] < '0' || s[i] > '9') return false;
@@ -314,20 +282,18 @@ void readSerial() {
   }
 }
 
-// ---------- setup and main loop ----------
+// ---------- setup and loop ----------
 void setup() {
   Serial.begin(9600);
   pinMode(RED_LED, OUTPUT);
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
   pinMode(TIMER_TRIGGER, OUTPUT);
-  digitalWrite(TIMER_TRIGGER, HIGH);  // pin 2 must sit HIGH except during the start pulse
+  digitalWrite(TIMER_TRIGGER, HIGH);  // pin 2 idles HIGH
   pinMode(TIMER_RESET, OUTPUT);
   pinMode(TIMER_OUTPUT, INPUT);
 #if USE_OLED
-  // 0x3C is the usual I2C address; some OLED boards use 0x3D. If no OLED answers, the board
-  // still works, and the laptop program can show the code instead (--show-code).
-  oledOk = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  oledOk = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // some modules use 0x3D
 #endif
   goIdle();
 }
@@ -353,6 +319,6 @@ void loop() {
   }
 
   if (state == ST_WAITING && millis() - waitingSince > MAX_WAIT_MS) {
-    goIdle();                        // the laptop never answered; no light means no access
+    goIdle();  // no answer from the laptop, so no green light
   }
 }

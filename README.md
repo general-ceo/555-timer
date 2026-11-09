@@ -1,168 +1,61 @@
-# CLARUS starter code
+# CLARUS
 
-Starter code for the team's current rough flow (11/05, **not final**). The laptop makes and checks the one-time code. The hardware shows it on the OLED, runs the 555 timer, reads the keypad, and lights the LEDs.
+Two-factor login for CSE 484 (Group Clarus). The laptop checks a username and password, then sends a one-time code to the CLARUS board. The code shows up on the OLED, and the user has to type it on the keypad before the 555 timer runs out.
 
-| File | Runs on | Language |
-|---|---|---|
-| `laptop/clarus_login.py` | Laptop | Python 3 + pyserial |
-| `laptop/test_clarus_login.py` | Laptop | Python (tests, no hardware needed) |
-| `arduino/clarus/clarus.ino` | Arduino | C++ (Arduino) |
-
-Values marked **TBD** in the code are team decisions that haven't been made yet.
+| File | Runs on |
+|---|---|
+| `laptop/clarus_login.py` | Laptop (Python 3 + pyserial) |
+| `laptop/test_clarus_login.py` | Laptop (tests, no hardware needed) |
+| `arduino/clarus/clarus.ino` | ItsyBitsy M0 Express (Arduino, C++) |
 
 ## How a login works
 
-1. The laptop program asks for a username and password (factor 1) and checks them against `users.json`. That file holds only salted hashes, never passwords.
-2. The laptop makes a random 4-digit code with Python's `secrets` module and sends `CODE 4821` down the USB cable.
-3. The Arduino shows the code on the OLED, starts the 555, and answers `STARTED`.
-4. The user types the digits on the keypad. `*` clears and `#` sends. On every digit or `*`, the Arduino sends `TYPED` with the digits so far, and the laptop shows them live (`Typed: 4 8 _ _`). On `#`, the Arduino sends `ENTRY 4821`.
-5. If the 555 runs out first, the Arduino lights **yellow** and sends `TIMEOUT`.
-6. The laptop compares the entry with its code and sends `OK` (Arduino lights **green**) or `BAD` (Arduino lights **red**).
-7. After a wrong code or a timeout, the laptop sends a new code. After 3 failures (TBD), it locks out for 60 s (TBD) and goes back to the password prompt.
+1. Enter a username and password on the laptop. They're checked against salted hashes in `users.json`.
+2. The laptop makes a random 4-digit code and sends `CODE 1234` to the board.
+3. The board shows the code on the OLED, starts the 555, and replies `STARTED`.
+4. Type the code on the keypad (`*` clears, `#` submits). The laptop shows the digits as you type.
+5. The board sends `ENTRY 1234`, or `TIMEOUT` (yellow LED) if the timer runs out first.
+6. The laptop checks the code and replies `OK` (green LED) or `BAD` (red LED).
+7. A wrong code or timeout gets a new code. After 3 failures there's a 60 s lockout.
 
-**Fail closed:** the laptop denies access in all of these cases:
-- the hardware isn't found
-- the hardware doesn't answer
-- the hardware sends anything other than these exact messages
-- the cable is pulled
+If the board is missing, stops answering, or sends something unexpected, access is denied.
 
-### Messages (one line of text each, 9600 baud)
+Messages go over USB serial at 9600 baud, one per line:
 
-| Direction | Message | Meaning |
-|---|---|---|
-| Laptop → Arduino | `HELLO` | Are you the CLARUS board? |
-| Arduino → Laptop | `CLARUS 1` | Yes. This only finds the right port; it is not security. |
-| Laptop → Arduino | `CODE 4821` | Show this code and start the timer |
-| Arduino → Laptop | `STARTED` | Timer running, code on the display |
-| Arduino → Laptop | `TYPED 48` | The digits typed so far, sent on every digit or `*` (`TYPED` alone after a clear). Only an echo: it never says whether a digit is right. |
-| Arduino → Laptop | `ENTRY 4821` | What the user typed (sent on `#`) |
-| Arduino → Laptop | `TIMEOUT` | The 555 ran out; yellow is on |
-| Laptop → Arduino | `OK` / `BAD` | Light green / red |
-| Laptop → Arduino | `CANCEL` | Stop and go back to idle |
-| Serial Monitor → Arduino | `TIMERTEST` | Diagnostic for wiring and timing the 555. The board starts it and reports `TIMERTEST A2=<0–1023>` (above 500 counts as on), then `WINDOW_MS=<ms>`, `NO_OUTPUT`, or `NEVER_OFF`. It never grants access. |
-| Arduino → Laptop | `ERROR TIMER` / `ERROR UNKNOWN` / `ERROR TOO_LONG` | Timer didn't start / unknown message / message too long |
-
-## Wiring: Adafruit ItsyBitsy M0 or M4 (the team's board)
-
-The other parts are still examples: a **4x4 membrane keypad** and a **128x64 I2C OLED (SSD1306)**. One USB cable powers everything and carries the messages. The sketch picks the ItsyBitsy pins automatically when you build for an ItsyBitsy.
-
-**The ItsyBitsy runs at 3.3 V.** No pin may ever see more than 3.3 V, so the 555 needs care (below).
-
-| Part | Connects to |
+| Laptop to board | Board to laptop |
 |---|---|
-| Keypad, 8 wires | Rows → #7, #9, #10, #11; columns → #12, #2, #3, #4 (#2–#4 are on the short end of the board). Pinouts differ between keypads; if keys come out wrong, change the order of `rowPins` / `colPins`. |
-| Red / yellow / green LED | A3 / A4 / A5 → 220–330 Ω resistor → LED long leg; LED short leg → G |
-| OLED, 4 pins | VCC → 3V, GND → G, SDA → SDA, SCL → SCL. The ItsyBitsy has no pull-up resistors on SDA/SCL; most OLED modules include them. |
-| Leave free | #5 (output only) and #13 (onboard LED) |
+| `HELLO` | `CLARUS 1` |
+| `CODE 1234` | `STARTED`, `TYPED 12`, `ENTRY 1234`, `TIMEOUT` |
+| `OK`, `BAD`, `CANCEL` | `ERROR TIMER`, `ERROR UNKNOWN`, `ERROR TOO_LONG` |
 
-**555 timer: pick one.**
+## Wiring (ItsyBitsy M0 Express)
 
-*Option A, a standard NE555.* It needs at least 4.5 V, so run it from the **USB** pin (5 V):
-
-| 555 pin | Connects to |
+| Part | Connection |
 |---|---|
-| 1 (GND) | G |
-| 2 (TRIG) | A0. The board's 3.3 V holds it off; a LOW pulse starts the window. |
-| 3 (OUT) | **Through a voltage divider:** pin 3 → 10 kΩ → A2, and A2 → 20 kΩ → G. Never wire pin 3 straight to A2, because 5 V can damage it. |
-| 4 (RESET) | A1 |
-| 5 (CTRL) | 10 nF capacitor → G |
-| 6 + 7 | Join them. Resistor R up to USB (5 V); capacitor C down to G. On an electrolytic capacitor, the leg marked "−" goes to G. |
-| 8 (VCC) | USB (5 V) |
+| Keypad | rows 2, 3, 4, 7; columns 9, 10, 11, 12 |
+| LEDs (220–330 Ω each) | red A3, yellow A4, green A5 |
+| OLED (SSD1306, I2C) | SDA, SCL, 3V, G |
+| NE555 (5 V from the USB pin) | pin 2 to A0, pin 4 to A1, pin 3 to 10 kΩ to A2, 20 kΩ from A2 to G |
 
-*Option B, a CMOS 555* (TLC555, LMC555, or ICM7555). These run from **3V**. Wire it as in Option A, but connect pins 8 and R to 3V instead of USB, and wire pin 3 straight to A2 with no divider.
+The 10k/20k divider keeps A2 under 3.3 V, so don't wire the 555 output straight to the board. The timing resistor and capacitor go on pins 6 and 7, and the window is about 1.1 × R × C.
 
-**Window length:** about 1.1 × R × C either way. For example, 180 kΩ with 100 µF gives about 19.8 s. Capacitors are often ±20%, so time it on the breadboard; `TIMERTEST` in the Serial Monitor measures it for you. Our build currently measures about 13.7 s (see Known limitations).
+## Setup and use
 
-### Arduino Uno (alternative)
+Board:
+1. In the Arduino IDE, add `https://adafruit.github.io/arduino-board-index/package_adafruit_index.json` under File > Preferences, then install **Adafruit SAMD Boards**.
+2. Install the **Keypad** and **Adafruit SSD1306** libraries.
+3. Open `arduino/clarus/clarus.ino`, select the ItsyBitsy M0 and its port, and upload. Close the Serial Monitor before running the laptop program.
 
-If the team switches to an Uno, the sketch uses these pins instead. Everything runs off the Uno's **5V** and **GND**, and no divider is needed.
-
-| Part | Connects to |
-|---|---|
-| Keypad, 8 wires | Rows → D2, D3, D4, D5; columns → D6, D7, D8, D9. Pinouts differ between keypads; if keys come out wrong, change the order of `rowPins` / `colPins`. |
-| Red / yellow / green LED | D10 / D11 / D12 → 220 Ω resistor → LED long leg; LED short leg → GND |
-| OLED, 4 pins | VCC → 5V (check that your module takes 5 V), GND → GND, SDA → A4, SCL → A5 |
-| 555 pin 1 (GND) | GND |
-| 555 pin 2 (TRIG) | A0. The Arduino pulses it LOW to start the window. |
-| 555 pin 3 (OUT) | A2. HIGH while the window is open. |
-| 555 pin 4 (RESET) | A1. The Arduino holds it LOW to stop the timer. |
-| 555 pin 5 (CTRL) | 10 nF capacitor → GND (keeps the timing steady) |
-| 555 pins 6 + 7 | Join them. Resistor R up to 5V; capacitor C down to GND. On an electrolytic capacitor, the leg marked "−" goes to GND. |
-| 555 pin 8 (VCC) | 5V |
-| D0, D1 | **Leave empty.** They carry the USB messages. |
-
-On an Uno, if the board shows "Timer fault" and the wiring looks right, measure pin 3 while the timer runs. A standard NE555's HIGH output can sit near the bottom of what the Uno reads as HIGH. A CMOS 555 (TLC555 or LMC555) outputs a full 5 V.
-
-## Running it
-
-**Arduino**
-1. Install the Arduino IDE.
-2. **ItsyBitsy only:**
-   1. Under File > Preferences > "Additional boards manager URLs", add `https://adafruit.github.io/arduino-board-index/package_adafruit_index.json`.
-   2. In Tools > Board > Boards Manager, install **Adafruit SAMD Boards**.
-3. In Tools > Manage Libraries, install **Keypad** (by Mark Stanley and Alexander Brevig) and **Adafruit SSD1306**, which also installs Adafruit GFX.
-4. Open `arduino/clarus/clarus.ino`. In Tools > Board, pick the ItsyBitsy M0 or M4 entry, whichever is printed on your board, then pick the port and click **Upload**. If no port shows up, double-tap the ItsyBitsy's reset button to put it into upload mode, and check that the USB cable carries data.
-5. No OLED yet? Set `USE_OLED` to `0` at the top of the sketch.
-
-The sketch compiles for an Arduino Uno, with and without the OLED. It was checked on 11/05 with Arduino AVR Boards 1.8.8, Keypad 3.1.1, and Adafruit SSD1306 2.5.17. It also compiles for the ItsyBitsy M0 Express and the ItsyBitsy M4, with and without the OLED (checked 11/06 with Adafruit SAMD Boards 1.7.17). The ItsyBitsy pins were checked against Adafruit's board definitions. Nothing has run on real hardware yet.
-
-The ItsyBitsy M0 and M4 have plenty of memory. On an Uno, the OLED's screen buffer takes 1 KB of the board's 2 KB memory at startup, which leaves only about 270 bytes free. That's enough for this sketch, but keep text in `F("...")` and avoid large arrays or `String`. If the OLED stays blank, low memory is one possible cause.
-
-**Test the board by itself:**
-1. Open Tools > Serial Monitor and set it to 9600 baud with **Newline** line ending.
-2. Type `HELLO`. Expect `CLARUS 1`.
-3. Type `CODE 1234`. Expect `STARTED`, with the code on the OLED.
-4. On the keypad, press `1 2 3 4 #`. Expect `TYPED 1`, `TYPED 12`, `TYPED 123`, `TYPED 1234`, then `ENTRY 1234`.
-5. Type `OK` for green or `BAD` for red. Or wait about 20 s for `TIMEOUT` and yellow.
-6. Close the Serial Monitor afterward. Only one program can use the port at a time.
-
-**Testing before the 555 is wired:** with nothing on A2, `CODE 1234` answers `ERROR TIMER`. That's correct: the board refuses to start an attempt without a working timer. To test everything else anyway, run a jumper wire from **A2 to 3V** on an ItsyBitsy (**never 5V or USB**, which could damage the pin), or from A2 to 5V on an Uno. The board then thinks the timer is running:
-- `CODE 1234` answers `STARTED`.
-- About 28 s later, the backstop limit sends `TIMEOUT` and lights yellow.
-- Typing the code and `#` before then sends `ENTRY 1234` as usual.
-
-Remove the jumper before connecting the 555.
-
-**Laptop** (from a terminal, in the `laptop` folder)
-
-Install pyserial:
+Laptop (from the `laptop` folder):
 ```bash
 pip install -r requirements.txt
-```
-
-Create a demo user (only a salted hash goes into `users.json`):
-```bash
 python clarus_login.py --add-user
-```
-
-Log in. Add `--show-code` to print the code on the laptop instead of the OLED, or `--port COM3` to skip the port search:
-```bash
 python clarus_login.py
 ```
+`--port COM3` picks a port, and `--show-code` also prints the code on the laptop (testing only).
 
-Run the tests. They use a fake device and need no hardware:
-```bash
-python -m unittest test_clarus_login.py -v
-```
+Tests: `python -m unittest test_clarus_login.py -v`
 
-There is deliberately no switch that skips the hardware in the real program. A switch like that would be a way around the second factor. The fake device exists only in the tests.
+## Timer tuning
 
-## Still TBD (team decisions)
-
-- OLED or laptop screen for showing the code (both supported: `USE_OLED` and `--show-code`)
-- Board, keypad, and OLED models
-- Code length (`CODE_DIGITS`, in both files)
-- What `*` and `#` do
-- Lockout counts and length
-- What the push buttons do (this code doesn't use them yet)
-- The 555's R and C values
-
-## Known limitations (for the report)
-
-- **The timer window is short.** On our build the 555 window measures about **13.7 s** instead of the 20 s target, because of part tolerance and the R and C values used. When the timer is on, A2 reads about 790. The window scales with R × C, so raising R × C by about 1.5× (a larger resistor R or capacitor C) brings it close to 20 s. Use `TIMERTEST` to measure it. Planned before the 11/16 presentation.
-
-- **No device authentication.** A program on the laptop could pretend to be the board, because the code travels in plain text over the cable. Future work: a secret key shared by the board and the laptop, with a keyed-hash (HMAC) challenge and response.
-- **Local access defeats it.** Anyone who can run or edit programs on the laptop can skip `clarus_login.py`. Guarding the real computer login would mean hooking into the operating system's login, which is out of scope.
-- **Lockouts reset on restart.** The failure counts live only while the program runs.
-- **Anyone at the board can pass.** Someone who can see the OLED and also has the password gets in.
-- **Don't hand in real passwords.** Use a demo password for any `users.json` you submit.
+In the Serial Monitor (9600 baud, Newline), send `TIMERTEST`. The board prints the A2 reading and how long the window lasted (`WINDOW_MS=...`). It currently measures about 13.7 s; the goal is 20 s.
