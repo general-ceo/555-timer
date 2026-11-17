@@ -183,23 +183,45 @@ def show_typed(digits: str) -> None:
     print(f"\rTyped: {' '.join(slots)}   ", end="", flush=True)
 
 
-def wait_for_reply(dev, deadline: float) -> str:
+class ConsoleUI:
+    """Shows second-factor progress in the terminal. clarus_web.py swaps in a web version."""
+
+    def prompt(self, code: str | None) -> None:
+        """A new code was sent. `code` is only given with --show-code."""
+        if code:
+            print(f"Your code: {code}  (type it on the keypad, then press #)")
+        else:
+            print("Type the code shown on the CLARUS display, then press #.")
+
+    def typed(self, digits: str) -> None:
+        show_typed(digits)
+
+    def end_typing(self) -> None:
+        print()
+
+    def say(self, text: str) -> None:
+        print(text)
+
+
+def wait_for_reply(dev, deadline: float, ui=None) -> str:
     """Show TYPED echoes and return the first other reply (ENTRY, TIMEOUT, ...)."""
-    show_typed("")
+    ui = ui or ConsoleUI()
+    ui.typed("")
     while True:
         reply = dev.read_line(max(0.0, deadline - time.monotonic()))
         if reply is None:
-            print()
+            ui.end_typing()
             raise DeviceError("no reply from the hardware")
         typed = TYPED_RE.fullmatch(reply)
         if not typed:
-            print()
+            ui.end_typing()
             return reply
-        show_typed(typed.group(1) or "")
+        ui.typed(typed.group(1) or "")
 
 
-def second_factor(dev, show_code: bool = False, sleep=time.sleep, make_code=new_code) -> bool:
+def second_factor(dev, show_code: bool = False, sleep=time.sleep, make_code=new_code, ui=None) -> bool:
     """True only if the right code is typed in time. A new code is used after every failure."""
+    ui = ui or ConsoleUI()
     failures = 0
     while failures < MAX_CODE_FAILURES:
         code = make_code()
@@ -207,21 +229,18 @@ def second_factor(dev, show_code: bool = False, sleep=time.sleep, make_code=new_
         dev.send(f"CODE {code}")
         if dev.read_line(2.0) != "STARTED":
             raise DeviceError("the hardware did not start the timer")
-        if show_code:
-            print(f"Your code: {code}  (type it on the keypad, then press #)")
-        else:
-            print("Type the code shown on the CLARUS display, then press #.")
+        ui.prompt(code if show_code else None)
 
-        reply = wait_for_reply(dev, time.monotonic() + REPLY_DEADLINE_S)
+        reply = wait_for_reply(dev, time.monotonic() + REPLY_DEADLINE_S, ui)
         if reply == "TIMEOUT":
-            print("Time is up.")
+            ui.say("Time is up.")
         else:
             match = ENTRY_RE.fullmatch(reply)
             if match and hmac.compare_digest(match.group(1), code):
                 dev.send("OK")
                 return True
             dev.send("BAD")
-            print("Wrong code.")
+            ui.say("Wrong code.")
         failures += 1
         sleep(RESULT_PAUSE_S)
     return False

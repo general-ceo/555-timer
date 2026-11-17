@@ -5,7 +5,8 @@ Two-factor login for CSE 484 (Group Clarus). The laptop checks a username and pa
 | File | Runs on |
 |---|---|
 | `laptop/clarus_login.py` | Laptop (Python 3 + pyserial) |
-| `laptop/test_clarus_login.py` | Laptop (tests, no hardware needed) |
+| `laptop/clarus_web.py` | Laptop (same login as a local web page) |
+| `laptop/test_clarus_login.py`, `laptop/test_clarus_web.py` | Laptop (tests, no hardware needed) |
 | `arduino/clarus/clarus.ino` | ItsyBitsy M0 Express (Arduino, C++) |
 
 ## How a login works
@@ -54,7 +55,9 @@ python clarus_login.py
 ```
 `--port COM3` picks a port, and `--show-code` also prints the code on the laptop (testing only).
 
-Tests: `python -m unittest test_clarus_login.py -v`
+To log in from a browser instead of the terminal, run `python clarus_web.py` and open http://127.0.0.1:8000. The steps are the same: the page asks for the username and password, shows the keypad digits as you type, and shows the result. It only listens on localhost, takes the same `--port` and `--show-code` options, and `--http-port 8080` changes the web port. Users are still added with `python clarus_login.py --add-user`.
+
+Tests: `python -m unittest test_clarus_login.py test_clarus_web.py -v`
 
 ## Timer tuning
 
