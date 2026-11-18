@@ -1,7 +1,8 @@
 """CLARUS two-factor login in the browser.
 
 Same flow as clarus_login.py, but the username/password form and the keypad
-progress are on a local web page instead of the terminal.
+progress are on a local web page instead of the terminal. After both factors it shows
+a few toy "confidential" files, and the session ends after 5 minutes.
 
     python clarus_web.py                  serve on http://127.0.0.1:8000
     python clarus_web.py --http-port 8080 use another web port
@@ -26,10 +27,23 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from clarus_login import (CODE_DIGITS, LOCKOUT_S, MAX_CODE_FAILURES, MAX_PASSWORD_FAILURES, USERS_FILE,
-                          DeviceError, check_password, load_users, open_device, second_factor)
+                          DeviceError, check_password, import_old_users, load_users, lockout_left,
+                          log_attempt, open_device, second_factor)
 
 COOKIE = "clarus_session"
 MAX_FORM_BYTES = 4096
+SESSION_S = 300  # 5 minutes after access is granted
+
+# Toy "confidential" files, all fake
+FILES = {
+    "q4_budget.txt": "CLARUS Lab - Q4 budget (fake)\n\nBreadboards ........ $12.00\nNE555 timers ....... $3.50\n"
+                     "OLED display ....... $8.95\nKeypad ............. $5.95\nPizza for meetings . $64.00\n",
+    "lab_wifi.txt": "Network:  CLARUS-LAB\nPassword: correct-horse-battery-staple\n\n(Not a real network.)\n",
+    "launch_plan.txt": "Project CLARUS launch plan\n\n1. Present on Nov 18\n2. Submit the final report by Nov 23\n"
+                       "3. Go wireless (someday)\n4. Sleep\n",
+    "secret_recipe.txt": "Grandma's chocolate chip cookies\n\n2 1/4 cups flour\n1 cup butter\n3/4 cup sugar\n"
+                         "3/4 cup brown sugar\n2 eggs\n2 cups chocolate chips\n\nBake at 375 F for 10 minutes.\n",
+}
 
 
 class Attempt:
@@ -43,6 +57,12 @@ class Attempt:
         self.code = None      # only set with --show-code
         self.notice = ""      # "Wrong code." / "Time is up." from the last round
         self.message = ""     # final result
+        self.finished_at = None
+
+    def seconds_left(self) -> int:
+        if self.finished_at is None:
+            return SESSION_S
+        return max(0, math.ceil(SESSION_S - (time.monotonic() - self.finished_at)))
 
     def status(self) -> dict:
         return {"stage": self.stage, "round": self.round, "rounds": MAX_CODE_FAILURES, "typed": self.typed,
@@ -79,8 +99,9 @@ class App:
         self.show_code = show_code
         self.sleep = sleep
         self.dev = None
-        self.board = threading.Lock()   # held while a code step is running
-        self.lock = threading.Lock()    # guards the fields below
+        self.board = threading.Lock()     # held while a code step is running
+        self.checking = threading.Lock()  # one password check at a time
+        self.lock = threading.Lock()      # guards the fields below
         self.sessions: dict[str, Attempt] = {}
         self.password_failures = 0
         self.locked_until = 0.0
@@ -90,7 +111,8 @@ class App:
 
     def locked_for(self) -> int:
         with self.lock:
-            return max(0, math.ceil(self.locked_until - time.monotonic()))
+            here = max(0, math.ceil(self.locked_until - time.monotonic()))
+        return max(here, lockout_left(self.users_path))  # the log keeps it across restarts
 
     def lock_out(self) -> None:
         with self.lock:
@@ -107,19 +129,24 @@ class App:
 
     def login(self, name: str, password: str) -> tuple[str | None, str | None]:
         """Check factor 1 and start factor 2. Returns (session token, None) or (None, error)."""
-        wait = self.locked_for()
-        if wait:
-            return None, f"Locked. Try again in {wait} seconds."
-        if not check_password(load_users(self.users_path), name, password):
+        with self.checking:
+            wait = self.locked_for()
+            if wait:
+                return None, f"Locked. Try again in {wait} seconds."
+            if not check_password(load_users(self.users_path), name, password):
+                log_attempt("password", "wrong", name, path=self.users_path)
+                with self.lock:
+                    self.password_failures += 1
+                    if self.password_failures < MAX_PASSWORD_FAILURES:
+                        return None, "Wrong username or password."
+                    self.password_failures = 0
+                self.lock_out()
+                log_attempt("password", "lockout", name, path=self.users_path)
+                return None, f"Too many failed attempts. Locked for {LOCKOUT_S} seconds."
+            log_attempt("password", "ok", name, path=self.users_path)
             with self.lock:
-                self.password_failures += 1
-                if self.password_failures < MAX_PASSWORD_FAILURES:
-                    return None, "Wrong username or password."
                 self.password_failures = 0
-            self.lock_out()
-            return None, f"Too many failed attempts. Locked for {LOCKOUT_S} seconds."
-        with self.lock:
-            self.password_failures = 0
+                self.sessions = {t: a for t, a in self.sessions.items() if a.seconds_left() > 0}
 
         if not self.board.acquire(blocking=False):
             return None, "The CLARUS board is busy with another login. Try again shortly."
@@ -137,12 +164,18 @@ class App:
         granted = False
         lost_board = False
         message = "Access denied."
+
+        def code_log(result, seconds):
+            log_attempt("code", result, attempt.user, seconds, path=self.users_path)
+
         try:
-            granted = second_factor(self.dev, show_code=self.show_code, sleep=self.sleep, ui=WebUI(attempt))
+            granted = second_factor(self.dev, show_code=self.show_code, sleep=self.sleep, ui=WebUI(attempt),
+                                    log=code_log)
             if granted:
                 message = f"Access granted. Welcome, {attempt.user}."
             else:
                 self.lock_out()
+                code_log("lockout", None)
                 message = f"Too many failed codes. Locked for {LOCKOUT_S} seconds."
         except DeviceError as e:
             lost_board = True
@@ -161,12 +194,17 @@ class App:
                 self.dev = None  # look for the board again on the next login
             attempt.code = None
             attempt.message = message
+            attempt.finished_at = time.monotonic()
             attempt.stage = "granted" if granted else "denied"
             self.board.release()
 
     def session(self, token: str | None) -> Attempt | None:
         with self.lock:
-            return self.sessions.get(token) if token else None
+            attempt = self.sessions.get(token) if token else None
+            if attempt and attempt.seconds_left() == 0:
+                del self.sessions[token]
+                return None
+            return attempt
 
     def end_session(self, token: str | None) -> None:
         with self.lock:
@@ -182,6 +220,7 @@ STYLE = """
   :root { --bg:#14171c; --card:#1e232b; --text:#e6e9ee; --muted:#9aa3b2; --line:#343b47; --accent:#7ea2ff;
           --good:#5cc28a; --bad:#ff8a80; --warn:#f0c060; } }
 * { box-sizing:border-box; }
+[hidden] { display:none !important; }
 body { margin:0; min-height:100vh; display:grid; place-items:center; padding:16px;
        background:var(--bg); color:var(--text); font:16px/1.5 system-ui, sans-serif; }
 main { width:100%; max-width:360px; background:var(--card); border:1px solid var(--line);
@@ -200,6 +239,13 @@ button, .button { display:block; width:100%; margin-top:20px; padding:11px; font
        font-variant-numeric:tabular-nums; border:2px solid var(--line); border-radius:8px; }
 .slots span.on { border-color:var(--accent); }
 .center { text-align:center; }
+.files { list-style:none; padding:0; margin:16px 0 0; border:1px solid var(--line); border-radius:8px; }
+.files li + li { border-top:1px solid var(--line); }
+.files a { display:block; padding:10px 12px; color:var(--text); text-decoration:none; }
+.files a:hover { background:var(--bg); }
+pre { white-space:pre-wrap; font:14px/1.5 ui-monospace, Consolas, monospace; background:var(--bg);
+      border:1px solid var(--line); border-radius:8px; padding:12px; margin:16px 0 0; }
+.small { font-size:14px; }
 """
 
 
@@ -263,10 +309,34 @@ def verify_page() -> bytes:
 <a id="back" class="button" href="/" hidden>Back to sign in</a>""", VERIFY_SCRIPT)
 
 
+COUNTDOWN_SCRIPT = """
+const el = document.getElementById('left');
+let left = Number(el.dataset.s);
+function tick() {
+  if (left <= 0) { location = '/'; return; }
+  el.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  left--; setTimeout(tick, 1000);
+}
+tick();
+"""
+
+
+def session_footer(attempt: Attempt) -> str:
+    return (f"<p class='small center'>Session ends in <span id='left' data-s='{attempt.seconds_left()}'></span></p>"
+            "<form method='post' action='/logout'><button>Sign out</button></form>")
+
+
 def welcome_page(attempt: Attempt) -> bytes:
+    links = "".join(f"<li><a href='/files/{name}'>&#128196; {name}</a></li>" for name in FILES)
     return page("CLARUS Welcome", f"""
-<h1 class="good">Access granted</h1><p>Welcome, {html.escape(attempt.user)}.</p>
-<form method="post" action="/logout"><button>Sign out</button></form>""")
+<h1 class="good">Access granted</h1><p>Welcome, {html.escape(attempt.user)}. These files are only shown after both factors.</p>
+<ul class="files">{links}</ul>{session_footer(attempt)}""", COUNTDOWN_SCRIPT)
+
+
+def file_page(attempt: Attempt, name: str) -> bytes:
+    return page(f"CLARUS - {name}", f"""
+<h1>{html.escape(name)}</h1><pre>{html.escape(FILES[name])}</pre>
+<a class="button" href="/welcome">Back to files</a>{session_footer(attempt)}""", COUNTDOWN_SCRIPT)
 
 
 # ---------- web server ----------
@@ -274,6 +344,7 @@ def welcome_page(attempt: Attempt) -> bytes:
 class Handler(BaseHTTPRequestHandler):
     server_version = "CLARUS"
     sys_version = ""
+    timeout = 10  # drop connections that stall mid-request
 
     @property
     def app(self) -> App:
@@ -304,7 +375,14 @@ class Handler(BaseHTTPRequestHandler):
     def redirect(self, to: str, cookie: str | None = None) -> None:
         self.send(303, location=to, cookie=cookie)
 
+    def host_ok(self) -> bool:
+        """Only answer requests addressed to this laptop, which blocks DNS rebinding from other sites."""
+        port = self.server.server_address[1]
+        return self.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}")
+
     def do_GET(self):
+        if not self.host_ok():
+            return self.send(403, page("Forbidden", "<h1>Forbidden</h1>"))
         token = self.token()
         attempt = self.app.session(token)
         path = self.path.split("?", 1)[0]
@@ -328,16 +406,26 @@ class Handler(BaseHTTPRequestHandler):
             if not attempt or attempt.stage != "granted":
                 return self.redirect("/")
             return self.send(200, welcome_page(attempt))
+        if path.startswith("/files/"):
+            if not attempt or attempt.stage != "granted":
+                return self.redirect("/")
+            name = path[len("/files/"):]
+            if name in FILES:  # only names from the list, so no path tricks like ../
+                log_attempt("file", name, attempt.user, path=self.app.users_path)
+                return self.send(200, file_page(attempt, name))
         self.send(404, page("Not found", "<h1>Not found</h1><a class='button' href='/'>Sign in</a>"))
 
     def do_POST(self):
         origin = self.headers.get("Origin")
-        if origin and origin not in (f"http://{self.headers.get('Host')}", "null"):
+        if not self.host_ok() or (origin and origin != f"http://{self.headers.get('Host')}"):
             return self.send(403, page("Forbidden", "<h1>Forbidden</h1>"))
         path = self.path.split("?", 1)[0]
         if path == "/login":
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_FORM_BYTES:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_FORM_BYTES:
                 return self.send(413, page("Too large", "<h1>Request too large</h1>"))
             form = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"))
             name = form.get("username", [""])[0].strip()
@@ -370,6 +458,9 @@ def main(argv=None) -> int:
     parser.add_argument("--show-code", action="store_true", help="also show the code on the page (testing only)")
     args = parser.parse_args(argv)
 
+    moved = import_old_users()
+    if moved:
+        print(f"Moved {moved} user(s) from users.json into clarus.db. users.json can be deleted.")
     app = App(lambda: open_device(args.port), show_code=args.show_code)
     if not app.has_users():
         print("No users yet. Run: python clarus_login.py --add-user")

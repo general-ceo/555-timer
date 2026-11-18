@@ -4,7 +4,6 @@ Run: python -m unittest test_clarus_web.py -v
 """
 import http.cookiejar
 import json
-import secrets
 import tempfile
 import threading
 import time
@@ -60,10 +59,8 @@ class QuietHandler(web.Handler):
 class WebLoginTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.users_path = Path(self.tmp.name) / "users.json"
-        salt = secrets.token_bytes(16)
-        users = {"logan": {"salt": salt.hex(), "hash": cl.hash_password("correct horse", salt).hex()}}
-        self.users_path.write_text(json.dumps(users), encoding="utf-8")
+        self.users_path = Path(self.tmp.name) / "clarus.db"
+        cl.save_user("logan", "correct horse", self.users_path)
         self.boards = []
         self.board_answer = types_it_right
 
@@ -212,8 +209,64 @@ class WebLoginTests(unittest.TestCase):
             self.browser.open(req)
         self.assertEqual(e.exception.code, 403)
 
+    def test_other_host_names_are_refused(self):
+        self.start()
+        req = urllib.request.Request(self.base + "/", headers={"Host": "evil.example"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            self.browser.open(req)
+        self.assertEqual(e.exception.code, 403)
+
+    def test_web_logins_are_logged(self):
+        self.start()
+        self.sign_in(password="nope")
+        self.sign_in()
+        self.final_status()
+        with cl.closing(cl.open_db(self.users_path)) as db:
+            rows = db.execute("SELECT step, result FROM attempts ORDER BY id").fetchall()
+        self.assertEqual(rows, [("password", "wrong"), ("password", "ok"), ("code", "granted")])
+
+    def test_files_need_both_factors(self):
+        self.start()
+        url, _ = self.get("/files/q4_budget.txt")
+        self.assertTrue(url.endswith("/"))
+        self.sign_in()
+        self.final_status()
+        self.assertIn("q4_budget.txt", self.get("/welcome")[1])
+        self.assertIn("Pizza for meetings", self.get("/files/q4_budget.txt")[1])
+        for bad in ["/files/../clarus.db", "/files/nope.txt", "/files/%2e%2e/clarus.db"]:
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                self.get(bad)
+            self.assertEqual(e.exception.code, 404)
+            e.exception.close()
+
+    def test_session_expires(self):
+        self.start()
+        self.sign_in()
+        self.final_status()
+        for attempt in self.app.sessions.values():
+            attempt.finished_at -= web.SESSION_S + 1
+        url, _ = self.get("/files/q4_budget.txt")
+        self.assertTrue(url.endswith("/"))
+
+    def test_parallel_guesses_cant_beat_the_lockout(self):
+        self.start()
+        threads = [threading.Thread(target=self.sign_in, kwargs={"password": "nope"}) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        with cl.closing(cl.open_db(self.users_path)) as db:
+            wrong = db.execute("SELECT COUNT(*) FROM attempts WHERE result = 'wrong'").fetchone()[0]
+        self.assertEqual(wrong, 3)
+
+    def test_lockout_survives_a_restart(self):
+        cl.log_attempt("password", "lockout", "logan", path=self.users_path)
+        self.start()  # a fresh App, as if the program was restarted
+        self.assertIn("Locked. Try again in", self.sign_in()[1])
+        self.assertEqual(self.boards, [])
+
     def test_no_users_message(self):
-        self.users_path.write_text("{}", encoding="utf-8")
+        self.users_path = Path(self.tmp.name) / "empty.db"
         self.start()
         self.assertIn("--add-user", self.get("/")[1])
 

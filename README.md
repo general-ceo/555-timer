@@ -11,12 +11,12 @@ Two-factor login for CSE 484 (Group Clarus). The laptop checks a username and pa
 
 ## How a login works
 
-1. Enter a username and password on the laptop. They're checked against salted hashes in `users.json`.
+1. Enter a username and password on the laptop. They're checked against salted hashes in `clarus.db` (SQLite).
 2. The laptop makes a random 4-digit code and sends `CODE 1234` to the board.
 3. The board shows the code on the OLED, starts the 555, and replies `STARTED`.
 4. Type the code on the keypad (`*` clears, `#` submits). The laptop shows the digits as you type.
-5. The board sends `ENTRY 1234`, or `TIMEOUT` (yellow LED) if the timer runs out first.
-6. The laptop checks the code and replies `OK` (green LED) or `BAD` (red LED).
+5. The board sends `ENTRY 1234`, or `TIMEOUT` if the timer runs out first.
+6. The laptop checks the code and replies `OK` or `BAD`. The OLED shows "Access granted", "Wrong code", or "Time is up".
 7. A wrong code or timeout gets a new code. After 3 failures there's a 60 s lockout.
 
 If the board is missing, stops answering, or sends something unexpected, access is denied.
@@ -34,7 +34,6 @@ Messages go over USB serial at 9600 baud, one per line:
 | Part | Connection |
 |---|---|
 | Keypad | rows 2, 3, 4, 7; columns 9, 10, 11, 12 |
-| LEDs (220–330 Ω each) | red A3, yellow A4, green A5 |
 | OLED (SSD1306, I2C) | SDA, SCL, 3V, G |
 | NE555 (5 V from the USB pin) | pin 2 to A0, pin 4 to A1, pin 3 to 10 kΩ to A2, 20 kΩ from A2 to G |
 
@@ -55,10 +54,12 @@ python clarus_login.py
 ```
 `--port COM3` picks a port, and `--show-code` also prints the code on the laptop (testing only).
 
-To log in from a browser instead of the terminal, run `python clarus_web.py` and open http://127.0.0.1:8000. The steps are the same: the page asks for the username and password, shows the keypad digits as you type, and shows the result. It only listens on localhost, takes the same `--port` and `--show-code` options, and `--http-port 8080` changes the web port. Users are still added with `python clarus_login.py --add-user`.
+Users and every login attempt (time, user, password or code step, result, seconds taken) go in `clarus.db`, which git ignores, so each laptop needs its own `--add-user`. An old `users.json` is copied in automatically. Lockouts are read back from the log, so restarting the program doesn't skip one. `python clarus_login.py --stats` prints a summary of the attempts; a code timeout's seconds is how long the 555 window lasted.
+
+To log in from a browser instead of the terminal, run `python clarus_web.py` and open http://127.0.0.1:8000. The steps are the same: the page asks for the username and password, shows the keypad digits as you type, and shows the result. After both factors it shows a few toy "confidential" files, and the session ends after 5 minutes. It only listens on localhost, takes the same `--port` and `--show-code` options, and `--http-port 8080` changes the web port. Users are still added with `python clarus_login.py --add-user`.
 
 Tests: `python -m unittest test_clarus_login.py test_clarus_web.py -v`
 
 ## Timer tuning
 
-In the Serial Monitor (9600 baud, Newline), send `TIMERTEST`. The board prints the A2 reading and how long the window lasted (`WINDOW_MS=...`). It currently measures about 13.7 s; the goal is 20 s.
+In the Serial Monitor (9600 baud, Newline), send `TIMERTEST`. The board prints the A2 reading and how long the window lasted (`WINDOW_MS=...`). It's tuned to about 20 s.
