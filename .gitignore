@@ -1,4 +1,5 @@
-# Logins: salted password hashes. Each person creates their own with --add-user.
+# Logins (salted password hashes) and the attempt log. Each person creates their own with --add-user.
+clarus.db
 users.json
 
 # Python

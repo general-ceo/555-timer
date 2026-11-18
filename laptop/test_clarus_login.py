@@ -166,10 +166,52 @@ class PasswordTests(unittest.TestCase):
 
     def test_users_file_never_holds_the_password(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "users.json"
-            path.write_text(json.dumps(self.users), encoding="utf-8")
-            self.assertNotIn("correct horse", path.read_text())
+            path = Path(d) / "clarus.db"
+            cl.save_user("logan", "correct horse", path)
+            self.assertNotIn(b"correct horse", path.read_bytes())
             self.assertTrue(cl.check_password(cl.load_users(path), "logan", "correct horse"))
+
+
+class DatabaseTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "clarus.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_old_users_json_is_imported_once(self):
+        salt = secrets.token_bytes(16)
+        old = Path(self.tmp.name) / "users.json"
+        old.write_text(json.dumps({"logan": {"salt": salt.hex(), "hash": cl.hash_password("pw123456", salt).hex()}}))
+        self.assertEqual(cl.import_old_users(old, self.db), 1)
+        self.assertEqual(cl.import_old_users(old, self.db), 0)
+        self.assertTrue(cl.check_password(cl.load_users(self.db), "logan", "pw123456"))
+
+    def test_sql_injection_in_username_is_just_text(self):
+        cl.save_user("logan", "correct horse", self.db)
+        users = cl.load_users(self.db)
+        for name in ["' OR '1'='1", "logan' --", "logan'; DROP TABLE users; --"]:
+            self.assertFalse(cl.check_password(users, name, "correct horse"))
+            cl.log_attempt("password", "wrong", name, path=self.db)
+        self.assertIn("logan", cl.load_users(self.db))
+
+    def test_lockout_is_remembered_in_the_log(self):
+        self.assertEqual(cl.lockout_left(self.db), 0)
+        cl.log_attempt("code", "lockout", "logan", path=self.db)
+        self.assertGreater(cl.lockout_left(self.db), cl.LOCKOUT_S - 5)
+
+    def test_attempts_are_logged_without_secrets(self):
+        cl.save_user("logan", "correct horse", self.db)
+        dev = FakeDevice(["STARTED", "TIMEOUT", "STARTED", "ENTRY 4821"])
+        log = lambda result, seconds: cl.log_attempt("code", result, "logan", seconds, path=self.db)
+        run_quietly(cl.second_factor, dev, sleep=no_sleep, make_code=codes("1111", "4821"), log=log)
+        with cl.closing(cl.open_db(self.db)) as db:
+            rows = db.execute("SELECT step, result, user FROM attempts ORDER BY id").fetchall()
+        self.assertEqual(rows, [("code", "timeout", "logan"), ("code", "granted", "logan")])
+        data = self.db.read_bytes()
+        self.assertNotIn(b"4821", data)
+        self.assertNotIn(b"correct horse", data)
 
 
 class DeviceLineTests(unittest.TestCase):
